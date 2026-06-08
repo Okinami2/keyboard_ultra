@@ -4,7 +4,10 @@
 
 set(SOURCES_LIST
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_ultra_keyboard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_board.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_keymap.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_matrix.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_keyboard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_usb_keyboard.c
 )
 

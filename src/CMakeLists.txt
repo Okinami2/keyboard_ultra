@@ -57,6 +57,14 @@ endif()
 project(${CHIP}_CFBB C ASM CXX)
 set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "")
 
+if(${BUILD_PLATFORM} MATCHES "windows")
+    # The Windows musl GCC treats backslashes in response files and linker
+    # options as escapes. Normalize generated paths before the final link.
+    set(RSP_WRAPPER ${PROJECT_SOURCE_DIR}/build/script/utils/gcc_rsp_wrapper.py)
+    set(CMAKE_C_LINK_EXECUTABLE
+        "\"${PY_PATH}\" \"${RSP_WRAPPER}\" \"<CMAKE_C_COMPILER>\" <FLAGS> <CMAKE_C_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> <LINK_LIBRARIES>")
+endif()
+
 if(EXISTS ${CMAKE_BINARY_DIR}/auto_gen_libfunc.lds)
     file(REMOVE ${CMAKE_BINARY_DIR}/auto_gen_libfunc.lds)
 endif()

@@ -1,31 +1,50 @@
-# TP78 Ultra Keyboard
+# TP78 Ultra Keyboard v1
 
-这是 TP78 Ultra 主键盘固件入口，不是接收器固件。
+这是从 TP78 v2（CH582M）迁移到 TP78 Ultra/v3（BS21E）的第一版主键盘固件。
+工程使用 SDK 标准 `bs21e-standard` Flash 分区和串口 Bootloader，不包含接收器工程里的
+Vendor HID OTA、专用升级分区或 U 盘配置模式。
 
-当前结构只保留主键盘必需的有线链路：
+## 已迁移
 
-- KEYSCAN 扫描键盘矩阵。
-- 标准 USB Keyboard HID 向电脑发送按键。
-- 使用开发板串口 Bootloader 直接烧录。
-- 使用 SDK 默认 `bs21e-standard` Flash 分区。
+- 按金手指信号顺序实现的 6 行 x 14 列 GPIO 矩阵扫描和 5 次采样消抖。
+- v2 默认主键位层。
+- v2 CapsLock 功能层：单击 CapsLock 仍发送 CapsLock；按住 CapsLock 再按其他键进入功能层。
+- Caps 功能层中的方向键、翻页、Home/End、PrintScreen 和左右鼠标键。
+- USB Keyboard、Mouse、Consumer Control 复合 HID 报告。
+- `Fn+-` / `Fn+=` 音量减/加。
+- `Fn+R` 长按 2 秒软件复位。
+- `左 Ctrl + 左 Alt + Backspace` 长按 2 秒软件复位。
+- `Fn+F1` 至 `Fn+F6` 灯效选择入口，当前打印调试信息，供 WS2812 驱动接入。
 
-接收器固件中的 SLE Client、协议转发、Vendor HID OTA 和专用 Flash
-分区均已移除。USB HID 仍然保留，因为键盘通过 USB 连接电脑时必须使用
-HID 键盘协议；它与 HID 烧录通道不是一回事。
+## Ultra 管脚
 
-## 需要按 PCB 调整的文件
+板级映射集中在 `tp78_board.h`。矩阵使用以下 BS21E GPIO：
 
-`tp78_keymap.c` 是唯一的基础键位映射入口。当前表沿用 SDK 的 16 行 x 8
-列参考矩阵，以保证工程可以直接编译。量产前应按 TP78 PCB 的实际行列接线
-和键位修改该表。
+- ROW0..5: `22, 18, 17, 14, 15, 16`
+- COL0..13: `25, 2, 26, 27, 11, 12, 13, 28, 29, 30, 0, 1, 3, 4`
+
+保留外设定义：
+
+- I2C SCL/SDA: `GPIO6/GPIO9`
+- TrackPoint INT: `GPIO23`
+- Battery ADC/CHRG: `GPIO31/GPIO24`
+- Motor: `GPIO10`
+- WS2812: `GPIO5`
+
+## 未迁移到第一版
+
+- MPR121 触摸条、PS/2、UART3 和 Boot 金手指管脚：v3 硬件已移除。
+- CH582M 私有 2.4G RF：后续应改为 BS21E SLE，不能直接复用旧 RF PHY。
+- FATFS/U 盘配置：后续使用 BS21E NV 和 VIA Raw HID。
+- OLED、I2C TrackPoint 数据读取、电池显示、马达和 WS2812 实际驱动。
+- VIA 动态改键、宏和持久化。
 
 ## 构建
 
-工程目标为 `standard-bs21e-1100e`，产品选项为：
+目标为 `standard-bs21e-1100e`，产品配置：
 
 ```text
 CONFIG_SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD=y
 ```
 
-HiSpark Studio 项目文件为 `src/tp78_ultra_keyboard.hiproj`，烧录协议使用
-`serial`。
+HiSpark Studio 工程为 `src/tp78_ultra_keyboard.hiproj`，烧录协议为 `serial`。

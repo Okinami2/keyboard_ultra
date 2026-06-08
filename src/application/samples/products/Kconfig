@@ -154,6 +154,9 @@ config SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
     default n
     depends on ENABLE_PRODUCTS_SAMPLE
     select DRIVER_SUPPORT_USB
+    select DRIVER_SUPPORT_GPIO
+    select DRIVER_SUPPORT_PINCTRL
+    select DRIVER_SUPPORT_TCXO
     help
         Enable the TP78 Ultra wired USB keyboard firmware.
 
