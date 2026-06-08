@@ -1,0 +1,18 @@
+.vscode/
+*.code-workspace
+
+# Build and IDE output
+build.log
+src/build.log
+src/output/
+src/analyzerJson/
+src/tools/pkg/fwpkg/**/*.fwpkg
+src/tools/pkg/**/partition.bin
+src/tools/pkg/**/boot_bin/*.bin
+
+# Python caches and local tools
+__pycache__/
+*.py[cod]
+
+# HiSpark local project state
+*.hiproj.user

@@ -1,0 +1,14 @@
+config TP78_ULTRA_USB_VID
+    hex
+    prompt "USB vendor ID."
+    default 0x109B
+
+config TP78_ULTRA_USB_PID
+    hex
+    prompt "USB product ID."
+    default 0x7800
+
+config TP78_ULTRA_USB_RELEASE
+    hex
+    prompt "USB device release number."
+    default 0x0100
