@@ -6,6 +6,7 @@
 #include "tp78_keycodes.h"
 #include "tp78_keymap.h"
 #include "tp78_matrix.h"
+#include "tp78_rgb.h"
 #include "tp78_usb_keyboard.h"
 #include "tp78_keyboard.h"
 
@@ -53,14 +54,21 @@ static void tp78_handle_fn(bool fn)
         }
 
         reset_combo = tp78_pressed(2, 4);
-        if (tp78_rising(0, 1) || tp78_rising(0, 2) || tp78_rising(0, 3) ||
-            tp78_rising(0, 4) || tp78_rising(0, 5) || tp78_rising(0, 6)) {
-            for (uint8_t style = 1; style <= 6; style++) {
-                if (tp78_rising(0, style)) {
-                    osal_printk("[tp78] RGB style %u selected\r\n", style);
-                    break;
-                }
+        for (uint8_t style = 1; style <= 6; style++) {
+            if (tp78_rising(0, style)) {
+                tp78_rgb_set_effect((tp78_rgb_effect_t)(style - 1U));
+                break;
             }
+        }
+        if (tp78_rising(5, 11)) {
+            tp78_rgb_adjust_brightness(1);
+        } else if (tp78_rising(5, 9)) {
+            tp78_rgb_adjust_brightness(-1);
+        }
+        if (tp78_rising(5, 10)) {
+            tp78_rgb_adjust_speed(1);
+        } else if (tp78_rising(5, 8)) {
+            tp78_rgb_adjust_speed(-1);
         }
         if (tp78_rising(2, 5)) {
             osal_printk("[tp78] TrackPoint toggle requested\r\n");
@@ -150,6 +158,9 @@ void tp78_keyboard_process(void)
 
     for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
         for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
+            if (tp78_rising(row, col)) {
+                tp78_rgb_key_event(row, col);
+            }
             if (!tp78_pressed(row, col) || (row == 3 && col == 0)) {
                 continue;
             }
