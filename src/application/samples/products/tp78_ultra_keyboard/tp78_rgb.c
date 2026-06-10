@@ -16,6 +16,23 @@
 #define TP78_RGB_MIN_BRIGHTNESS 8U
 #define TP78_RGB_SPEED_MIN 1U
 #define TP78_RGB_SPEED_MAX 8U
+#define TP78_RGB_STARTUP_FRAME_MS 40U
+#define TP78_RGB_STARTUP_IGNITE_FRAMES 40U
+#define TP78_RGB_STARTUP_EXPAND_FRAMES 100U
+#define TP78_RGB_STARTUP_SCAN_FRAMES 70U
+#define TP78_RGB_STARTUP_FLASH_FRAMES 40U
+#define TP78_RGB_STARTUP_BLEND_FRAMES 50U
+#define TP78_RGB_STARTUP_BRIGHTNESS 72U
+#define TP78_RGB_STARTUP_WAVE_COUNT 5U
+#define TP78_RGB_STARTUP_WAVE_INTERVAL 18U
+#define TP78_RGB_STARTUP_WAVE_DURATION 28U
+#define TP78_RGB_STARTUP_WAVE_RADIUS 28U
+#define TP78_RGB_STARTUP_SCAN_COUNT 5U
+#define TP78_RGB_STARTUP_SCAN_INTERVAL 12U
+#define TP78_RGB_STARTUP_SCAN_DURATION 22U
+#define TP78_RGB_STARTUP_TOTAL_FRAMES (TP78_RGB_STARTUP_IGNITE_FRAMES + \
+    TP78_RGB_STARTUP_EXPAND_FRAMES + TP78_RGB_STARTUP_SCAN_FRAMES + \
+    TP78_RGB_STARTUP_FLASH_FRAMES + TP78_RGB_STARTUP_BLEND_FRAMES)
 
 static const uint8_t g_key_to_led[TP78_MATRIX_ROWS][TP78_MATRIX_COLS] = {
     { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 },
@@ -76,6 +93,11 @@ static void tp78_fill(tp78_rgb_color_t color)
     }
 }
 
+static uint8_t tp78_abs_diff(uint8_t left, uint8_t right)
+{
+    return left > right ? (uint8_t)(left - right) : (uint8_t)(right - left);
+}
+
 static uint8_t tp78_triangle(uint8_t phase)
 {
     return phase < 128U ? (uint8_t)(phase * 2U) : (uint8_t)((255U - phase) * 2U);
@@ -131,6 +153,164 @@ static void tp78_render_rainbow(void)
     }
 }
 
+static void tp78_apply_brightness(uint8_t brightness)
+{
+    for (uint16_t i = 0; i < TP78_LED_COUNT; i++) {
+        g_pixels[i] = tp78_color_scale(g_pixels[i], brightness);
+    }
+}
+
+static void tp78_render_startup_ignite(uint16_t frame)
+{
+    uint8_t strength = (uint8_t)(((uint32_t)(frame + 1U) * 255U) /
+        TP78_RGB_STARTUP_IGNITE_FRAMES);
+
+    for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
+        for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
+            uint8_t led = g_key_to_led[row][col];
+            if (led == TP78_NO_LED) {
+                continue;
+            }
+            uint8_t distance = (uint8_t)(tp78_abs_diff((uint8_t)(col * 2U), 13U) +
+                tp78_abs_diff((uint8_t)(row * 3U), 8U));
+            uint8_t level = distance < 7U ? (uint8_t)(255U - distance * 34U) : 0U;
+            level = tp78_scale(level, strength);
+            g_pixels[led] = tp78_color_scale((tp78_rgb_color_t){ 180U, 235U, 255U }, level);
+        }
+    }
+}
+
+static void tp78_render_startup_expand(uint16_t frame)
+{
+    for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
+        for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
+            uint8_t led = g_key_to_led[row][col];
+            if (led == TP78_NO_LED) {
+                continue;
+            }
+            uint8_t distance = (uint8_t)(tp78_abs_diff((uint8_t)(col * 2U), 13U) +
+                tp78_abs_diff((uint8_t)(row * 3U), 8U));
+            uint8_t strongest = 0U;
+            uint8_t strongest_wave = 0U;
+
+            for (uint8_t wave = 0U; wave < TP78_RGB_STARTUP_WAVE_COUNT; wave++) {
+                uint16_t launch = (uint16_t)(wave * TP78_RGB_STARTUP_WAVE_INTERVAL);
+                if (frame < launch || frame >= launch + TP78_RGB_STARTUP_WAVE_DURATION) {
+                    continue;
+                }
+                uint16_t age = (uint16_t)(frame - launch);
+                uint8_t radius = (uint8_t)(((uint32_t)age * TP78_RGB_STARTUP_WAVE_RADIUS) /
+                    (TP78_RGB_STARTUP_WAVE_DURATION - 1U));
+                uint8_t delta = tp78_abs_diff(distance, radius);
+                uint8_t level = delta < 5U ? (uint8_t)(255U - delta * 52U) : 0U;
+                if (level > strongest) {
+                    strongest = level;
+                    strongest_wave = wave;
+                }
+            }
+
+            tp78_rgb_color_t color = tp78_color_wheel(
+                (uint8_t)(145U + strongest_wave * 18U + distance * 2U));
+            g_pixels[led] = tp78_color_scale(color, strongest);
+        }
+    }
+}
+
+static void tp78_render_startup_scan(uint16_t frame)
+{
+    for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
+        for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
+            uint8_t led = g_key_to_led[row][col];
+            if (led == TP78_NO_LED) {
+                continue;
+            }
+            uint8_t strongest = 0U;
+            uint8_t strongest_scan = 0U;
+
+            for (uint8_t scan = 0U; scan < TP78_RGB_STARTUP_SCAN_COUNT; scan++) {
+                uint16_t launch = (uint16_t)(scan * TP78_RGB_STARTUP_SCAN_INTERVAL);
+                if (frame < launch || frame >= launch + TP78_RGB_STARTUP_SCAN_DURATION) {
+                    continue;
+                }
+                uint16_t age = (uint16_t)(frame - launch);
+                int16_t head = (int16_t)(((uint32_t)age * (TP78_MATRIX_COLS + 4U)) /
+                    (TP78_RGB_STARTUP_SCAN_DURATION - 1U)) - 2;
+                int16_t delta = head - (int16_t)col;
+                if (delta < 0) {
+                    delta = (int16_t)-delta;
+                }
+                uint8_t level = delta == 0 ? 255U :
+                    (delta == 1 ? 150U : (delta == 2 ? 55U : 0U));
+                if (level > strongest) {
+                    strongest = level;
+                    strongest_scan = scan;
+                }
+            }
+
+            tp78_rgb_color_t color = (strongest_scan & 1U) == 0U ?
+                (tp78_rgb_color_t){ 255U, 255U, 255U } :
+                (tp78_rgb_color_t){ 45U, 145U, 255U };
+            g_pixels[led] = tp78_color_scale(color, strongest);
+        }
+    }
+}
+
+static void tp78_render_startup_flash(uint16_t frame)
+{
+    uint8_t pulse_phase = (uint8_t)((frame * 16U) & 0xFFU);
+    uint8_t pulse = tp78_triangle(pulse_phase);
+
+    for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
+        for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
+            uint8_t led = g_key_to_led[row][col];
+            if (led == TP78_NO_LED) {
+                continue;
+            }
+            uint8_t checker = ((row + col + (frame >> 2U)) & 1U) != 0U ? 150U : 255U;
+            uint8_t level = tp78_scale(pulse, checker);
+            g_pixels[led] = tp78_color_scale((tp78_rgb_color_t){ 145U, 210U, 255U }, level);
+        }
+    }
+}
+
+static void tp78_render_startup(uint16_t frame)
+{
+    (void)memset(g_pixels, 0, sizeof(g_pixels));
+
+    if (frame < TP78_RGB_STARTUP_IGNITE_FRAMES) {
+        tp78_render_startup_ignite(frame);
+        tp78_apply_brightness(TP78_RGB_STARTUP_BRIGHTNESS);
+        return;
+    }
+    frame = (uint16_t)(frame - TP78_RGB_STARTUP_IGNITE_FRAMES);
+
+    if (frame < TP78_RGB_STARTUP_EXPAND_FRAMES) {
+        tp78_render_startup_expand(frame);
+        tp78_apply_brightness(TP78_RGB_STARTUP_BRIGHTNESS);
+        return;
+    }
+    frame = (uint16_t)(frame - TP78_RGB_STARTUP_EXPAND_FRAMES);
+
+    if (frame < TP78_RGB_STARTUP_SCAN_FRAMES) {
+        tp78_render_startup_scan(frame);
+        tp78_apply_brightness((uint8_t)(TP78_RGB_STARTUP_BRIGHTNESS + 16U));
+        return;
+    }
+    frame = (uint16_t)(frame - TP78_RGB_STARTUP_SCAN_FRAMES);
+
+    if (frame < TP78_RGB_STARTUP_FLASH_FRAMES) {
+        tp78_render_startup_flash(frame);
+        tp78_apply_brightness(TP78_RGB_STARTUP_BRIGHTNESS);
+        return;
+    }
+    frame = (uint16_t)(frame - TP78_RGB_STARTUP_FLASH_FRAMES);
+
+    tp78_render_rainbow();
+    tp78_apply_brightness((uint8_t)(((uint32_t)g_brightness * (frame + 1U)) /
+        TP78_RGB_STARTUP_BLEND_FRAMES));
+    g_phase = (uint16_t)(g_phase + g_speed);
+}
+
 static void tp78_render_frame(void)
 {
     tp78_rgb_effect_t effect = g_effect;
@@ -157,10 +337,7 @@ static void tp78_render_frame(void)
             break;
     }
 
-    uint8_t brightness = g_brightness;
-    for (uint16_t i = 0; i < TP78_LED_COUNT; i++) {
-        g_pixels[i] = tp78_color_scale(g_pixels[i], brightness);
-    }
+    tp78_apply_brightness(g_brightness);
     g_phase = (uint16_t)(g_phase + g_speed);
 }
 
@@ -168,6 +345,15 @@ static int tp78_rgb_task(void *arg)
 {
     unused(arg);
     osal_printk("[tp78] RGB task started\r\n");
+
+    osal_printk("[tp78] RGB startup animation\r\n");
+    for (uint16_t frame = 0U; frame < TP78_RGB_STARTUP_TOTAL_FRAMES; frame++) {
+        tp78_render_startup(frame);
+        tp78_ws2812_write(g_pixels, TP78_LED_COUNT);
+        g_frame_count++;
+        osal_msleep(TP78_RGB_STARTUP_FRAME_MS);
+    }
+    osal_printk("[tp78] RGB startup complete\r\n");
 
     while (true) {
         tp78_render_frame();
