@@ -7,7 +7,8 @@
 
 - 6 行 x 14 列 GPIO 矩阵扫描和 5 次采样消抖。
 - v2 默认键位层和 CapsLock 功能层。
-- USB Keyboard、Mouse、Consumer Control 复合 HID。
+- USB、BLE、SLE 三模 Keyboard、Mouse、Consumer Control HID。
+- `Fn+F10` / `Fn+F11` / `Fn+F12` 切换 USB / BLE / SLE。
 - `Fn+-` / `Fn+=` 音量减/加。
 - `Fn+R` 长按 2 秒软件复位。
 - `左 Ctrl + 左 Alt + Backspace` 长按 2 秒软件复位。
@@ -58,6 +59,11 @@ SPI 时钟为 8 MHz，每个 WS2812 数据位编码为一个 SPI 字节：逻辑
 
 ```text
 CONFIG_SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD=y
+CONFIG_TP78_ULTRA_BLE_NAME="TP78 Ultra BLE"
+CONFIG_TP78_ULTRA_SLE_NAME="TP78_ULTRA"
 ```
+
+SLE 模式使用版本 2 完整状态帧连接 `tp78_ultra_receiver`。接收器默认扫描名称
+`TP78_ULTRA`，现有接收器协议无需修改。
 
 HiSpark Studio 工程为 `src/tp78_ultra_keyboard.hiproj`，烧录协议为 `serial`。

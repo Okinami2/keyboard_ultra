@@ -158,7 +158,7 @@ config SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
     select DRIVER_SUPPORT_PINCTRL
     select DRIVER_SUPPORT_TCXO
     help
-        Enable the TP78 Ultra wired USB keyboard firmware.
+        Enable the TP78 Ultra USB, BLE, and SLE keyboard firmware.
 
 if SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
 menu "TP78 Ultra Keyboard Configuration"

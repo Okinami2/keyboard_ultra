@@ -7,7 +7,7 @@
 #include "tp78_keymap.h"
 #include "tp78_matrix.h"
 #include "tp78_rgb.h"
-#include "tp78_usb_keyboard.h"
+#include "tp78_transport.h"
 #include "tp78_keyboard.h"
 
 #define TP78_RESET_HOLD_MS 2000
@@ -20,6 +20,8 @@ static uint8_t g_last_modifiers;
 static uint8_t g_last_keys[6];
 static uint8_t g_last_mouse_buttons;
 static uint16_t g_last_consumer;
+static tp78_transport_mode_t g_last_mode;
+static bool g_last_transport_ready;
 
 static bool tp78_pressed(uint8_t row, uint8_t col)
 {
@@ -47,6 +49,13 @@ static void tp78_handle_fn(bool fn)
     bool reset_combo = false;
 
     if (fn) {
+        if (tp78_rising(0, 10)) {
+            tp78_transport_set_mode(TP78_TRANSPORT_USB);
+        } else if (tp78_rising(0, 11)) {
+            tp78_transport_set_mode(TP78_TRANSPORT_BLE);
+        } else if (tp78_rising(0, 12)) {
+            tp78_transport_set_mode(TP78_TRANSPORT_SLE);
+        }
         if (tp78_pressed(1, 11)) {
             consumer = TP78_CONSUMER_VOLUME_DOWN;
         } else if (tp78_pressed(1, 12)) {
@@ -76,7 +85,7 @@ static void tp78_handle_fn(bool fn)
     }
 
     if (consumer != g_last_consumer) {
-        (void)tp78_usb_consumer_send(consumer);
+        (void)tp78_transport_consumer_send(consumer);
         g_last_consumer = consumer;
     }
 
@@ -128,6 +137,8 @@ void tp78_keyboard_init(void)
 {
     (void)memset(g_previous, 0, sizeof(g_previous));
     (void)memset(g_last_keys, 0, sizeof(g_last_keys));
+    g_last_mode = tp78_transport_get_mode();
+    g_last_transport_ready = tp78_transport_is_ready();
     tp78_matrix_init();
 }
 
@@ -155,6 +166,16 @@ void tp78_keyboard_process(void)
     }
 
     tp78_handle_fn(fn);
+    tp78_transport_mode_t mode = tp78_transport_get_mode();
+    bool transport_ready = tp78_transport_is_ready();
+    if (mode != g_last_mode || transport_ready != g_last_transport_ready) {
+        g_last_modifiers = 0xFF;
+        (void)memset(g_last_keys, 0xFF, sizeof(g_last_keys));
+        g_last_mouse_buttons = 0xFF;
+        g_last_consumer = 0xFFFF;
+        g_last_mode = mode;
+        g_last_transport_ready = transport_ready;
+    }
 
     for (uint8_t row = 0; row < TP78_MATRIX_ROWS; row++) {
         for (uint8_t col = 0; col < TP78_MATRIX_COLS; col++) {
@@ -190,12 +211,12 @@ void tp78_keyboard_process(void)
     }
 
     if (modifiers != g_last_modifiers || memcmp(keys, g_last_keys, sizeof(keys)) != 0) {
-        (void)tp78_usb_keyboard_send(modifiers, keys);
+        (void)tp78_transport_keyboard_send(modifiers, keys);
         g_last_modifiers = modifiers;
         (void)memcpy(g_last_keys, keys, sizeof(keys));
     }
     if (mouse_buttons != g_last_mouse_buttons) {
-        (void)tp78_usb_mouse_send(mouse_buttons, 0, 0, 0);
+        (void)tp78_transport_mouse_send(mouse_buttons, 0, 0, 0);
         g_last_mouse_buttons = mouse_buttons;
     }
 

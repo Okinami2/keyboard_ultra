@@ -9,6 +9,9 @@ set(SOURCES_LIST
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_matrix.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_keyboard.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_usb_keyboard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_ble_keyboard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_sle_keyboard.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/tp78_transport.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_ws2812.c
     ${CMAKE_CURRENT_SOURCE_DIR}/tp78_rgb.c
 )

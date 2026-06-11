@@ -4,7 +4,7 @@
 #include "tp78_keyboard.h"
 #include "tp78_matrix.h"
 #include "tp78_rgb.h"
-#include "tp78_usb_keyboard.h"
+#include "tp78_transport.h"
 
 #define TP78_TASK_PRIORITY 24
 #define TP78_TASK_STACK_SIZE 0x1400
@@ -14,14 +14,14 @@ static int tp78_keyboard_task(void *arg)
 {
     unused(arg);
 
-    if (tp78_usb_keyboard_init() != 0) {
-        osal_printk("[tp78] USB initialization failed\r\n");
+    if (tp78_transport_init() != 0) {
+        osal_printk("[tp78] transport initialization failed\r\n");
         return -1;
     }
 
     tp78_keyboard_init();
     tp78_rgb_init();
-    osal_printk("[tp78] Ultra v2 ready, matrix 6x14, RGB 83 LEDs\r\n");
+    osal_printk("[tp78] Ultra v2 ready, USB/BLE/SLE, matrix 6x14, RGB 83 LEDs\r\n");
 
     while (true) {
         (void)tp78_matrix_scan();

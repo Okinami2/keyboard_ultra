@@ -5,6 +5,7 @@
 config AT_BLE
     bool
     prompt "Support AT BLE function."
+    default n if SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
     default y
 
 if AT_BLE
@@ -17,6 +18,7 @@ endif
 config AT_GLE
     bool
     prompt "Support AT SLE function."
+    default n if SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
     default y
 
 if AT_GLE

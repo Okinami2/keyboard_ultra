@@ -1,5 +1,6 @@
 choice
     prompt "Select sle ble support"
+    default SUPPORT_SLE_BLE_PERIPHERAL if SAMPLE_SUPPORT_TP78_ULTRA_KEYBOARD
     default SUPPORT_SLE_BLE_CENTRAL_DEFAULT
     config SUPPORT_SLE_BLE_CENTRAL_DEFAULT
         bool "Select sle ble central default."

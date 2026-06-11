@@ -12,3 +12,13 @@ config TP78_ULTRA_USB_RELEASE
     hex
     prompt "USB device release number."
     default 0x0100
+
+config TP78_ULTRA_BLE_NAME
+    string
+    prompt "BLE device name."
+    default "TP78 Ultra BLE"
+
+config TP78_ULTRA_SLE_NAME
+    string
+    prompt "SLE device name."
+    default "TP78_ULTRA"
