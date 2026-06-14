@@ -11,6 +11,7 @@
 #include "tp78_keyboard.h"
 
 #define TP78_RESET_HOLD_MS 2000
+#define TP78_PAIR_HOLD_MS 2000
 
 static bool g_previous[TP78_MATRIX_ROWS][TP78_MATRIX_COLS];
 static bool g_caps_used;
@@ -22,6 +23,9 @@ static uint8_t g_last_mouse_buttons;
 static uint16_t g_last_consumer;
 static tp78_transport_mode_t g_last_mode;
 static bool g_last_transport_ready;
+static uint64_t g_pair_started;
+static tp78_transport_mode_t g_pair_mode;
+static bool g_pair_triggered;
 
 static bool tp78_pressed(uint8_t row, uint8_t col)
 {
@@ -56,6 +60,31 @@ static void tp78_handle_fn(bool fn)
         } else if (tp78_rising(0, 12)) {
             tp78_transport_set_mode(TP78_TRANSPORT_SLE);
         }
+        for (uint8_t slot = 0; slot < 4; slot++) {
+            if (tp78_rising(1, (uint8_t)(slot + 1U))) {
+                tp78_transport_select_ble_slot(slot);
+                break;
+            }
+        }
+
+        tp78_transport_mode_t pair_mode = TP78_TRANSPORT_USB;
+        if (tp78_pressed(0, 11)) {
+            pair_mode = TP78_TRANSPORT_BLE;
+        } else if (tp78_pressed(0, 12)) {
+            pair_mode = TP78_TRANSPORT_SLE;
+        }
+        if (pair_mode == TP78_TRANSPORT_USB) {
+            g_pair_started = 0;
+            g_pair_triggered = false;
+        } else if (g_pair_started == 0 || g_pair_mode != pair_mode) {
+            g_pair_mode = pair_mode;
+            g_pair_started = uapi_tcxo_get_ms();
+            g_pair_triggered = false;
+        } else if (!g_pair_triggered &&
+            uapi_tcxo_get_ms() - g_pair_started >= TP78_PAIR_HOLD_MS) {
+            tp78_transport_start_pairing(pair_mode);
+            g_pair_triggered = true;
+        }
         if (tp78_pressed(1, 11)) {
             consumer = TP78_CONSUMER_VOLUME_DOWN;
         } else if (tp78_pressed(1, 12)) {
@@ -82,6 +111,9 @@ static void tp78_handle_fn(bool fn)
         if (tp78_rising(2, 5)) {
             osal_printk("[tp78] TrackPoint toggle requested\r\n");
         }
+    } else {
+        g_pair_started = 0;
+        g_pair_triggered = false;
     }
 
     if (consumer != g_last_consumer) {
@@ -165,6 +197,7 @@ void tp78_keyboard_process(void)
         g_caps_tap_pending = true;
     }
 
+    tp78_transport_process();
     tp78_handle_fn(fn);
     tp78_transport_mode_t mode = tp78_transport_get_mode();
     bool transport_ready = tp78_transport_is_ready();

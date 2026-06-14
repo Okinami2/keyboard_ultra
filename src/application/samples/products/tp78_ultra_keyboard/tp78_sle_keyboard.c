@@ -9,6 +9,7 @@
 #include "sle_errcode.h"
 #include "sle_ssap_server.h"
 #include "soc_osal.h"
+#include "tcxo.h"
 #include "tp78_sle_keyboard.h"
 
 #define TP78_SLE_ADV_HANDLE 1
@@ -30,6 +31,8 @@
 #define TP78_SLE_ADV_CHANNELS_ALL 0x07
 #define TP78_SLE_CONN_INTERVAL 0x64
 #define TP78_SLE_SUPERVISION_TIMEOUT 0x1F4
+#define TP78_SLE_PAIRING_TIMEOUT_MS 120000
+#define TP78_SLE_BOND_QUERY_COUNT 4
 
 static uint8_t g_server_id;
 static uint16_t g_service_handle;
@@ -38,6 +41,12 @@ static uint16_t g_connection_id;
 static uint8_t g_sequence[4];
 static bool g_connected;
 static bool g_service_initialized;
+static bool g_active;
+static bool g_pairing;
+static bool g_advertising;
+static bool g_adv_restart;
+static uint64_t g_pairing_deadline;
+static sle_addr_t g_connected_address;
 static uint8_t g_keyboard_leds;
 static uint8_t g_app_uuid[] = { 0x78, 0x03 };
 static uint8_t g_property_value[TP78_SLE_MAX_FRAME_LENGTH];
@@ -45,6 +54,11 @@ static uint8_t g_uuid_base[SLE_UUID_LEN] = {
     0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
     0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
+
+static bool tp78_sle_addr_equal(const sle_addr_t *left, const sle_addr_t *right)
+{
+    return left->type == right->type && memcmp(left->addr, right->addr, SLE_ADDR_LEN) == 0;
+}
 
 static uint16_t tp78_sle_crc16(const uint8_t *data, uint16_t length)
 {
@@ -92,8 +106,72 @@ static int32_t tp78_sle_encode(uint8_t type, const uint8_t *payload, uint16_t pa
     return frame_length;
 }
 
+static bool tp78_sle_get_bonded_receiver(sle_addr_t *address)
+{
+    sle_addr_t bonded[TP78_SLE_BOND_QUERY_COUNT] = { 0 };
+    uint16_t count = TP78_SLE_BOND_QUERY_COUNT;
+    if (sle_get_bonded_devices(bonded, &count) != ERRCODE_SLE_SUCCESS || count == 0) {
+        return false;
+    }
+    *address = bonded[0];
+    return true;
+}
+
+static void tp78_sle_keep_single_bond(void)
+{
+    sle_addr_t bonded[TP78_SLE_BOND_QUERY_COUNT] = { 0 };
+    uint16_t count = TP78_SLE_BOND_QUERY_COUNT;
+    if (sle_get_bonded_devices(bonded, &count) != ERRCODE_SLE_SUCCESS) {
+        return;
+    }
+    if (count > TP78_SLE_BOND_QUERY_COUNT) {
+        count = TP78_SLE_BOND_QUERY_COUNT;
+    }
+    for (uint16_t index = 1; index < count; index++) {
+        (void)sle_remove_paired_remote_device(&bonded[index]);
+    }
+}
+
+static void tp78_sle_remove_all_bonds(void)
+{
+    sle_addr_t bonded[TP78_SLE_BOND_QUERY_COUNT] = { 0 };
+    uint16_t count = TP78_SLE_BOND_QUERY_COUNT;
+    if (sle_get_bonded_devices(bonded, &count) != ERRCODE_SLE_SUCCESS) {
+        return;
+    }
+    if (count > TP78_SLE_BOND_QUERY_COUNT) {
+        count = TP78_SLE_BOND_QUERY_COUNT;
+    }
+    for (uint16_t index = 0; index < count; index++) {
+        (void)sle_remove_paired_remote_device(&bonded[index]);
+    }
+}
+
+static void tp78_sle_stop_advertising(void)
+{
+    g_adv_restart = false;
+    if (g_advertising) {
+        (void)sle_stop_announce(TP78_SLE_ADV_HANDLE);
+    }
+}
+
 static void tp78_sle_start_advertising(void)
 {
+    if (!g_active || g_connected || !g_service_initialized) {
+        return;
+    }
+
+    sle_addr_t receiver = { 0 };
+    if (!g_pairing && !tp78_sle_get_bonded_receiver(&receiver)) {
+        osal_printk("[tp78] SLE receiver is empty; hold Fn+F12 to pair\r\n");
+        return;
+    }
+    if (g_advertising) {
+        g_adv_restart = true;
+        (void)sle_stop_announce(TP78_SLE_ADV_HANDLE);
+        return;
+    }
+
     const char name[] = CONFIG_TP78_ULTRA_SLE_NAME;
     uint8_t response[2 + sizeof(name) - 1];
     uint8_t advertising[] = {
@@ -106,7 +184,8 @@ static void tp78_sle_start_advertising(void)
     (void)memcpy_s(response + 2, sizeof(response) - 2, name, sizeof(name) - 1);
 
     sle_announce_param_t parameters = { 0 };
-    parameters.announce_mode = SLE_ANNOUNCE_MODE_CONNECTABLE_SCANABLE;
+    parameters.announce_mode = g_pairing ? SLE_ANNOUNCE_MODE_CONNECTABLE_SCANABLE :
+        SLE_ANNOUNCE_MODE_CONNECTABLE_DIRECTED;
     parameters.announce_handle = TP78_SLE_ADV_HANDLE;
     parameters.announce_gt_role = SLE_ANNOUNCE_ROLE_T_CAN_NEGO;
     parameters.announce_level = SLE_ANNOUNCE_LEVEL_NORMAL;
@@ -117,6 +196,9 @@ static void tp78_sle_start_advertising(void)
     parameters.conn_interval_max = TP78_SLE_CONN_INTERVAL;
     parameters.conn_max_latency = 0;
     parameters.conn_supervision_timeout = TP78_SLE_SUPERVISION_TIMEOUT;
+    if (!g_pairing) {
+        parameters.peer_addr = receiver;
+    }
 
     sle_announce_data_t data = {
         .announce_data = advertising,
@@ -124,9 +206,36 @@ static void tp78_sle_start_advertising(void)
         .seek_rsp_data = response,
         .seek_rsp_data_len = sizeof(response),
     };
+    g_adv_restart = false;
     (void)sle_set_announce_param(TP78_SLE_ADV_HANDLE, &parameters);
     (void)sle_set_announce_data(TP78_SLE_ADV_HANDLE, &data);
     (void)sle_start_announce(TP78_SLE_ADV_HANDLE);
+}
+
+static void tp78_sle_adv_started(uint32_t announce_id, errcode_t status)
+{
+    unused(announce_id);
+    g_advertising = status == ERRCODE_SLE_SUCCESS;
+    if (g_advertising && (!g_active || g_connected)) {
+        (void)sle_stop_announce(TP78_SLE_ADV_HANDLE);
+    }
+}
+
+static void tp78_sle_adv_stopped(uint32_t announce_id, errcode_t status)
+{
+    unused(announce_id);
+    unused(status);
+    g_advertising = false;
+    if (g_adv_restart) {
+        g_adv_restart = false;
+        tp78_sle_start_advertising();
+    }
+}
+
+static void tp78_sle_adv_terminated(uint32_t announce_id)
+{
+    unused(announce_id);
+    g_advertising = false;
 }
 
 static int32_t tp78_sle_add_service(void)
@@ -193,14 +302,38 @@ static void tp78_sle_receive_write(uint8_t server_id, uint16_t conn_id, ssaps_re
 static void tp78_sle_connection_changed(uint16_t conn_id, const sle_addr_t *address,
     sle_acb_state_t state, sle_pair_state_t pair_state, sle_disc_reason_t reason)
 {
-    unused(address);
-    unused(pair_state);
     unused(reason);
     g_connection_id = conn_id;
     g_connected = state == SLE_ACB_STATE_CONNECTED;
-    if (!g_connected) {
+    if (g_connected) {
+        g_advertising = false;
+        g_connected_address = *address;
+        sle_addr_t receiver = { 0 };
+        if (!g_pairing && (!tp78_sle_get_bonded_receiver(&receiver) ||
+            !tp78_sle_addr_equal(&receiver, address))) {
+            (void)sle_disconnect_remote_device(address);
+        } else if (g_pairing && pair_state == SLE_PAIR_NONE) {
+            (void)sle_pair_remote_device(address);
+        }
+        if (pair_state == SLE_PAIR_PAIRED && g_pairing) {
+            g_pairing = false;
+            g_pairing_deadline = 0;
+        }
+    } else if (g_active) {
         tp78_sle_start_advertising();
     }
+}
+
+static void tp78_sle_pair_complete(uint16_t conn_id, const sle_addr_t *address, errcode_t status)
+{
+    unused(conn_id);
+    unused(address);
+    if (!g_pairing || status != ERRCODE_SLE_SUCCESS) {
+        return;
+    }
+    g_pairing = false;
+    g_pairing_deadline = 0;
+    osal_printk("[tp78] SLE receiver paired\r\n");
 }
 
 static void tp78_sle_enabled(uint8_t status)
@@ -208,6 +341,7 @@ static void tp78_sle_enabled(uint8_t status)
     unused(status);
     if (!g_service_initialized && tp78_sle_add_service() == 0) {
         g_service_initialized = true;
+        tp78_sle_keep_single_bond();
         tp78_sle_start_advertising();
     }
 }
@@ -223,15 +357,21 @@ int32_t tp78_sle_keyboard_init(void)
 {
     sle_dev_manager_callbacks_t device_callbacks = { 0 };
     sle_connection_callbacks_t connection_callbacks = { 0 };
+    sle_announce_seek_callbacks_t announce_callbacks = { 0 };
     ssaps_callbacks_t server_callbacks = { 0 };
 
     device_callbacks.sle_power_on_cb = tp78_sle_powered_on;
     device_callbacks.sle_enable_cb = tp78_sle_enabled;
     connection_callbacks.connect_state_changed_cb = tp78_sle_connection_changed;
+    connection_callbacks.pair_complete_cb = tp78_sle_pair_complete;
+    announce_callbacks.announce_enable_cb = tp78_sle_adv_started;
+    announce_callbacks.announce_disable_cb = tp78_sle_adv_stopped;
+    announce_callbacks.announce_terminal_cb = tp78_sle_adv_terminated;
     server_callbacks.write_request_cb = tp78_sle_receive_write;
 
     if (sle_dev_manager_register_callbacks(&device_callbacks) != ERRCODE_SLE_SUCCESS ||
         sle_connection_register_callbacks(&connection_callbacks) != ERRCODE_SLE_SUCCESS ||
+        sle_announce_seek_register_callbacks(&announce_callbacks) != ERRCODE_SLE_SUCCESS ||
         ssaps_register_callbacks(&server_callbacks) != ERRCODE_SLE_SUCCESS) {
         return -1;
     }
@@ -246,6 +386,57 @@ int32_t tp78_sle_keyboard_init(void)
 bool tp78_sle_keyboard_is_ready(void)
 {
     return g_connected && g_property_handle != 0;
+}
+
+void tp78_sle_keyboard_set_active(bool active)
+{
+    g_active = active;
+    g_pairing = false;
+    g_pairing_deadline = 0;
+    tp78_sle_stop_advertising();
+    if (!active) {
+        if (g_connected) {
+            (void)sle_disconnect_remote_device(&g_connected_address);
+        }
+        return;
+    }
+    if (g_connected) {
+        (void)sle_disconnect_remote_device(&g_connected_address);
+    } else {
+        tp78_sle_start_advertising();
+    }
+}
+
+void tp78_sle_keyboard_process(void)
+{
+    if (g_pairing && g_pairing_deadline != 0 && uapi_tcxo_get_ms() >= g_pairing_deadline) {
+        g_pairing = false;
+        g_pairing_deadline = 0;
+        tp78_sle_stop_advertising();
+        osal_printk("[tp78] SLE pairing timed out\r\n");
+        if (g_connected) {
+            (void)sle_disconnect_remote_device(&g_connected_address);
+        } else {
+            tp78_sle_start_advertising();
+        }
+    }
+}
+
+void tp78_sle_keyboard_start_pairing(void)
+{
+    if (!g_active || !g_service_initialized) {
+        return;
+    }
+    tp78_sle_remove_all_bonds();
+    g_pairing = true;
+    g_pairing_deadline = uapi_tcxo_get_ms() + TP78_SLE_PAIRING_TIMEOUT_MS;
+    tp78_sle_stop_advertising();
+    osal_printk("[tp78] SLE receiver pairing for 120 seconds\r\n");
+    if (g_connected) {
+        (void)sle_disconnect_remote_device(&g_connected_address);
+    } else {
+        tp78_sle_start_advertising();
+    }
 }
 
 static int32_t tp78_sle_send(uint8_t type, const uint8_t *payload, uint16_t payload_length)
