@@ -117,8 +117,9 @@ static void tp78_handle_fn(bool fn)
     }
 
     if (consumer != g_last_consumer) {
-        (void)tp78_transport_consumer_send(consumer);
-        g_last_consumer = consumer;
+        if (tp78_transport_consumer_send(consumer) == 0) {
+            g_last_consumer = consumer;
+        }
     }
 
     if (!reset_combo) {
@@ -244,13 +245,15 @@ void tp78_keyboard_process(void)
     }
 
     if (modifiers != g_last_modifiers || memcmp(keys, g_last_keys, sizeof(keys)) != 0) {
-        (void)tp78_transport_keyboard_send(modifiers, keys);
-        g_last_modifiers = modifiers;
-        (void)memcpy(g_last_keys, keys, sizeof(keys));
+        if (tp78_transport_keyboard_send(modifiers, keys) == 0) {
+            g_last_modifiers = modifiers;
+            (void)memcpy(g_last_keys, keys, sizeof(keys));
+        }
     }
     if (mouse_buttons != g_last_mouse_buttons) {
-        (void)tp78_transport_mouse_send(mouse_buttons, 0, 0, 0);
-        g_last_mouse_buttons = mouse_buttons;
+        if (tp78_transport_mouse_send(mouse_buttons, 0, 0, 0) == 0) {
+            g_last_mouse_buttons = mouse_buttons;
+        }
     }
 
     tp78_save_matrix();

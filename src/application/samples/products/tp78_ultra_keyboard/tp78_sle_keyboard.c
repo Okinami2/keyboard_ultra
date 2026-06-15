@@ -50,11 +50,6 @@ static sle_addr_t g_connected_address;
 static uint8_t g_keyboard_leds;
 static uint8_t g_app_uuid[] = { 0x78, 0x03 };
 static uint8_t g_property_value[TP78_SLE_MAX_FRAME_LENGTH];
-static uint8_t g_uuid_base[SLE_UUID_LEN] = {
-    0x37, 0xBE, 0xA8, 0x80, 0xFC, 0x70, 0x11, 0xEA,
-    0xB7, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
 static bool tp78_sle_addr_equal(const sle_addr_t *left, const sle_addr_t *right)
 {
     return left->type == right->type && memcmp(left->addr, right->addr, SLE_ADDR_LEN) == 0;
@@ -75,10 +70,13 @@ static uint16_t tp78_sle_crc16(const uint8_t *data, uint16_t length)
 
 static void tp78_sle_uuid(uint16_t value, sle_uuid_t *uuid)
 {
-    (void)memcpy_s(uuid->uuid, sizeof(uuid->uuid), g_uuid_base, sizeof(g_uuid_base));
+    if (uuid == NULL) {
+        return;
+    }
+    (void)memset_s(uuid, sizeof(*uuid), 0, sizeof(*uuid));
     uuid->len = TP78_SLE_UUID_SHORT_LENGTH;
-    uuid->uuid[14] = (uint8_t)value;
-    uuid->uuid[15] = (uint8_t)(value >> 8);
+    uuid->uuid[0] = (uint8_t)value;
+    uuid->uuid[1] = (uint8_t)(value >> 8);
 }
 
 static int32_t tp78_sle_encode(uint8_t type, const uint8_t *payload, uint16_t payload_length,
@@ -207,9 +205,16 @@ static void tp78_sle_start_advertising(void)
         .seek_rsp_data_len = sizeof(response),
     };
     g_adv_restart = false;
-    (void)sle_set_announce_param(TP78_SLE_ADV_HANDLE, &parameters);
-    (void)sle_set_announce_data(TP78_SLE_ADV_HANDLE, &data);
-    (void)sle_start_announce(TP78_SLE_ADV_HANDLE);
+    errcode_t status = sle_set_announce_param(TP78_SLE_ADV_HANDLE, &parameters);
+    if (status == ERRCODE_SLE_SUCCESS) {
+        status = sle_set_announce_data(TP78_SLE_ADV_HANDLE, &data);
+    }
+    if (status == ERRCODE_SLE_SUCCESS) {
+        status = sle_start_announce(TP78_SLE_ADV_HANDLE);
+    }
+    if (status != ERRCODE_SLE_SUCCESS) {
+        osal_printk("[tp78] SLE start announce failed:0x%x\r\n", (unsigned int)status);
+    }
 }
 
 static void tp78_sle_adv_started(uint32_t announce_id, errcode_t status)
