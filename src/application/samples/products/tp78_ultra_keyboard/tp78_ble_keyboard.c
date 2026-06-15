@@ -850,6 +850,24 @@ int32_t tp78_ble_keyboard_init(void)
     gap_ble_callbacks_t gap_callbacks = { 0 };
     bts_dev_manager_callbacks_t device_callbacks = { 0 };
 
+    /*
+     * Phones commonly advertise a public identity address but reconnect with
+     * a resolvable private address (RPA). The default SDK policy only adds
+     * bonds whose identity address is random to the resolving list, so a
+     * phone with a public identity can no longer pass the whitelist after a
+     * keyboard reboot. Computers usually reconnect with their stable address
+     * and therefore do not expose this bug.
+     *
+     * Load every bonded peer with an IRK into the controller resolving list.
+     * The advertising whitelist can then match the resolved identity while
+     * still restricting each keyboard slot to its bonded host.
+     */
+    errcode_t ral_status = ble_set_feature(BLE_FEATURE_ADD_RAL_POLICY, BLE_FEATURE_ADD_RAL_EVERY_ADDR);
+    if (ral_status != ERRCODE_BT_SUCCESS) {
+        osal_printk("[tp78] BLE resolving-list policy failed:0x%x\r\n", (unsigned int)ral_status);
+        return -1;
+    }
+
     gatt_callbacks.write_request_cb = tp78_ble_write_request;
     gap_callbacks.conn_state_change_cb = tp78_ble_connection_changed;
     gap_callbacks.pair_result_cb = tp78_ble_pair_complete;
