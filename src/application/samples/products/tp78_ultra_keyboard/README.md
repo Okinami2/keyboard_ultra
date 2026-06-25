@@ -134,35 +134,26 @@ drivers/chips/bs2x/porting/dma/dma_porting.c
 加了 DMA IRQ 入口日志。
 
 当前最后状态
-最后一次已经打包的版本是“DMA block 轮询 + 诊断日志”的版本。
-我刚刚开始把 OLED 发包改回 8 字节小包，但还没编译、没打包。
-下次继续时，建议从这里开始：
-先编译当前 8 字节小包版本并打包测试。
-如果 block:8 expected:8 后还失败，看 tx stop 是否超时。
-如果 STOP 超时，就查 I2C DMA 写入的 16-bit command 是否正确带 STOP 位，以及 uapi_dma_end_transfer() 是否过早关了 DMA。
+RGB 隔离测试已经确认不是 OLED/I2C 失败根因，当前已恢复 RGB/WS2812 初始化和 RGB 任务。
+当前优先目标是先跑通 OLED，而不是继续在 I2C DMA 路径里扩大或缩小 OLED 包。
+设备驱动开发指南里说明：I2C DMA 读写要求 DMA 驱动已初始化，同时 I2C 支持轮询/DMA 自动切换和阈值配置。
+本工程当前 target 配置是 `CONFIG_I2C_SUPPORT_DMA=y`，但没有打开 `CONFIG_I2C_SUPPORT_POLL_AND_DMA_AUTO_SWITCH`；如果应用调用 `uapi_i2c_set_dma_mode(..., true)`，即使 OLED 分成 8 字节小包，也仍然会强制走 DMA。
 
-Edited tp78_oled.c+25-14Review changesUndoReview
+因此当前解决路径是：TP78 I2C 默认固定回轮询模式，先绕开不稳定的 DMA IRQ/STOP 完成判定；后续需要继续查 DMA 时，再显式打开 `CONFIG_TP78_ULTRA_I2C_USE_DMA`。
+当前版本已增加 `CONFIG_TP78_ULTRA_I2C_USE_DMA`，默认关闭；启动日志应看到 `[tp78] I2C poll mode enabled`。
+补充检查结果：当前 WS2812 代码实际使用 `SPI_BUS_0` + `HAL_PIO_SPI0_TXD` + `GPIO5`，没有使用 SPI1，也没有把 `GPIO6` 配成 SPI。`HAL_PIO_SPI1_RXD = 6` 里的 6 是 pinmux 功能编号，不是 GPIO6 管脚号。
+当前更可能的问题不是 RGB/SPI 抢占，而是 GPIO9/SDA 物理线或同总线从设备在启动阶段已经把 SDA 拉低。
+最新实测显示 `pre-init-gpio` 阶段 SCL/SDA 已经是 `scl:1 sda:0`，此时管脚处于 GPIO 输入上拉，I2C 控制器还没有介入；bus clear 后仍为 `scl:1 sda:0`。随后单条 OLED 命令 `len:2 first:0xae` 失败，abort 诊断为 `lost:1`，符合 SDA 被外部拉低导致主机仲裁丢失/总线异常。
+当前版本新增 I2C 引脚和控制器 abort 诊断：I2C 控制器初始化前会打印 `I2C pins pre-init-gpio`；首次传输会打印 `I2C pins prepared`；失败时会打印 `write-fail`、`I2C abort regs` 和 `post-recover`。正常 pinmux 应为 `scl_mode:26 sda_mode:27`，分别对应 `HAL_PIO_I2C0_CLK` 和 `HAL_PIO_I2C0_DATA`。如果出现 `before-prepare-conflict`，说明 GPIO6/GPIO9 在两次 I2C 事务之间被其他代码改过。
+结合设备驱动开发指南的 I2C 注意事项，当前日志更符合“某次发送失败后，总线挂死”的情况。当前验证版把 SCL/SDA 内部上拉打开，并把 OLED 初始化命令改为一次只发 1 条命令。若 `pre-init-gpio` 阶段 SDA 就是 0，说明 GPIO9/SDA 物理线在 I2C 控制器介入前已经被拉低；若 `pre-init-gpio` 是 1/1，但写 0x3C 后失败，则看 `I2C abort regs` 中的 `addr_nack/data_nack/sda_stuck/lost` 来判断是无 ACK、数据 NACK、SDA stuck 还是仲裁丢失。
+当前构建在 `pre-init-gpio` 检测到总线不空闲时，会跳过预期设备表，不再假报 0x15/0x3C/0x5A 已存在；后续 I2C 读写也会直接跳过，避免反复触发 TX_ABRT。
 
-
-
-
-2:45
-
-
-
-
-
-
-总结你如何编译打包
-
-
-
-2:45
-
-
-
-
-
+烧录后验证顺序：
+1. 启动日志先看 `I2C pins pre-init-gpio`。如果还是 `scl:1 sda:0`，优先查硬件：GPIO9/SDA 是否短地、OLED/MPR121/TrackPoint 是否有未上电或损坏从设备拉低 SDA、SDA 管脚定义是否和原理图一致。
+2. 如果 `pre-init-gpio` 变成 `scl:1 sda:1`，再看设备表是否恢复到 0x15、0x3C、0x5A。
+3. 启动日志确认 I2C 模式为 `poll`，不应再出现 OLED 写入阶段的 I2C DMA tx 日志。
+4. 再执行 `AT+TP78OLEDON` 和 `AT+TP78OLED`，确认 SSD1306 能全亮和完整图片刷新。
+5. 如果 `pre-init-gpio` 是 1/1 但 OLED 仍失败，再看 `I2C abort regs` 中的 `addr_nack/data_nack/sda_stuck/lost`。
 
 编译命令在仓库根目录 D:\garfieldMiao\fbb_bs2x\src 执行：
 ninja -C output/bs21e/acore/standard-bs21e-1100e

@@ -15,7 +15,7 @@
 
 #define TP78_ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define TP78_OLED_AT_QUEUE_LEN 1
-#define TP78_OLED_AT_TASK_PRIORITY 26
+#define TP78_OLED_AT_TASK_PRIORITY 29
 #define TP78_OLED_AT_TASK_STACK_SIZE 0x1000
 
 typedef enum {

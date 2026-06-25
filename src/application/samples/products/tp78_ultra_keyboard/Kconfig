@@ -22,3 +22,9 @@ config TP78_ULTRA_SLE_NAME
     string
     prompt "SLE device name."
     default "TP78_ULTRA"
+
+config TP78_ULTRA_I2C_USE_DMA
+    bool
+    prompt "Use DMA for TP78 Ultra I2C bus."
+    default n
+    depends on I2C_SUPPORT_DMA

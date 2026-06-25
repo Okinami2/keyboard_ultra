@@ -14,9 +14,9 @@
 #define TP78_OLED_PAGE_OFFSET 0
 #define TP78_OLED_CTRL_CMD 0x00
 #define TP78_OLED_CTRL_DATA 0x40
-#define TP78_OLED_CMD_NOP 0xE3
-#define TP78_OLED_MIN_DMA_WRITE_LEN 8
-#define TP78_OLED_DATA_CHUNK 8
+#define TP78_OLED_MAX_I2C_WRITE_LEN 8
+#define TP78_OLED_COMMAND_CHUNK 1
+#define TP78_OLED_DATA_CHUNK (TP78_OLED_MAX_I2C_WRITE_LEN - 1)
 #define TP78_OLED_DEBUG_DATA_MAX 16
 #define TP78_OLED_COMMAND_DELAY_MS 1
 #define TP78_OLED_PAGE_YIELD_MS 1
@@ -33,10 +33,10 @@ static void tp78_oled_invalidate(void)
 
 static int32_t tp78_oled_send_commands(const uint8_t *commands, uint32_t length)
 {
-    uint8_t buffer[32];
+    uint8_t buffer[TP78_OLED_MAX_I2C_WRITE_LEN];
     uint32_t offset = 0;
 
-    if (commands == NULL || length == 0 || length + 1 > sizeof(buffer)) {
+    if (commands == NULL || length == 0) {
         return -1;
     }
 
@@ -44,8 +44,8 @@ static int32_t tp78_oled_send_commands(const uint8_t *commands, uint32_t length)
         uint32_t chunk = length - offset;
         uint32_t write_len;
 
-        if (chunk > (TP78_OLED_MIN_DMA_WRITE_LEN - 1)) {
-            chunk = TP78_OLED_MIN_DMA_WRITE_LEN - 1;
+        if (chunk > TP78_OLED_COMMAND_CHUNK) {
+            chunk = TP78_OLED_COMMAND_CHUNK;
         }
 
         buffer[0] = TP78_OLED_CTRL_CMD;
@@ -53,16 +53,18 @@ static int32_t tp78_oled_send_commands(const uint8_t *commands, uint32_t length)
             buffer[i + 1] = commands[offset + i];
         }
         write_len = chunk + 1;
-        while (write_len < TP78_OLED_MIN_DMA_WRITE_LEN) {
-            buffer[write_len++] = TP78_OLED_CMD_NOP;
-        }
 
         if (tp78_i2c_write(TP78_I2C_ADDR_OLED, buffer, write_len) != 0) {
+            osal_printk("[tp78] OLED cmd write failed off:%u chunk:%u len:%u first:0x%02x\r\n",
+                (unsigned int)offset, (unsigned int)chunk, (unsigned int)write_len,
+                (unsigned int)commands[offset]);
             return -1;
         }
 
         offset += chunk;
+#if TP78_OLED_COMMAND_DELAY_MS > 0
         osal_msleep(TP78_OLED_COMMAND_DELAY_MS);
+#endif
     }
     return 0;
 }
@@ -124,11 +126,10 @@ static int32_t tp78_oled_write_chunk(const uint8_t *data, uint8_t length)
         buffer[i + 1] = data[i];
     }
     write_len = (uint8_t)(length + 1);
-    while (write_len < TP78_OLED_MIN_DMA_WRITE_LEN) {
-        buffer[write_len++] = 0x00;
-    }
 
     if (tp78_i2c_write(TP78_I2C_ADDR_OLED, buffer, write_len) != 0) {
+        osal_printk("[tp78] OLED data write failed len:%u write_len:%u first:0x%02x\r\n",
+            (unsigned int)length, (unsigned int)write_len, (unsigned int)data[0]);
         return -1;
     }
 
