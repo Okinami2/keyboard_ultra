@@ -330,7 +330,7 @@ static int i2c_int_mode_down(osal_semaphore *sem)
     unused(sem);
     int osal_value = OSAL_SUCCESS;
 #if !defined(CONFIG_I2C_SUPPORT_IN_CHIP_LOOPBACK)
-    osal_value = osal_sem_down(sem);
+    osal_value = osal_sem_down_timeout(sem, CONFIG_I2C_WAIT_CONDITION_TIMEOUT);
 #endif
     return osal_value;
 }
@@ -349,6 +349,7 @@ static void i2c_dma_isr(uint8_t int_type, uint8_t ch, uintptr_t arg)
 {
     unused(arg);
     uint8_t bus = I2C_BUS_NONE;
+    osal_printk("[tp78] I2C DMA isr type:%u ch:%u\r\n", (unsigned int)int_type, (unsigned int)ch);
     for (uint8_t i = I2C_BUS_0; i < I2C_BUS_NONE; i++) {
         /* channel default value is 0, means not used. channel > 0 means used.
            So ch + 1 will not misjudgment with channel value 0. */
@@ -423,7 +424,10 @@ static errcode_t i2c_start_transmit_dma(i2c_bus_t bus, uint8_t dma_ch)
 {
     g_dma_trans[bus].write_channel = dma_ch + 1;
     g_dma_trans[bus].trans_succ = false;
-    if (uapi_dma_start_transfer(dma_ch) != ERRCODE_SUCC) {
+    errcode_t ret = uapi_dma_start_transfer(dma_ch);
+    osal_printk("[tp78] I2C DMA tx start bus:%u ch:%u ret:0x%x\r\n",
+        (unsigned int)bus, (unsigned int)dma_ch, (unsigned int)ret);
+    if (ret != ERRCODE_SUCC) {
         g_dma_trans[bus].write_channel = 0;
         return ERRCODE_I2C_DMA_CONFIG_ERROR;
     }
@@ -437,8 +441,12 @@ static errcode_t i2c_transmit_dma(i2c_bus_t bus, hal_i2c_buffer_wrap_t *data_cfg
 
     i2c_write_by_dma_config(bus, (uint16_t*)data_cfg->buffer, (uint16_t)data_cfg->len, &user_cfg);
 
-    if (uapi_dma_configure_peripheral_transfer_single(&user_cfg, &dma_ch,
-        i2c_dma_isr, (uintptr_t)NULL) != ERRCODE_SUCC) {
+    errcode_t ret = uapi_dma_configure_peripheral_transfer_single(&user_cfg, &dma_ch,
+        i2c_dma_isr, (uintptr_t)NULL);
+    osal_printk("[tp78] I2C DMA tx cfg ret:0x%x ch:%u len:%u dst_hs:%u src:0x%x dst:0x%x\r\n",
+        (unsigned int)ret, (unsigned int)dma_ch, (unsigned int)data_cfg->len,
+        (unsigned int)user_cfg.dest_handshaking, (unsigned int)user_cfg.src, (unsigned int)user_cfg.dest);
+    if (ret != ERRCODE_SUCC) {
         return ERRCODE_I2C_DMA_CONFIG_ERROR;
     }
 
@@ -483,6 +491,27 @@ static errcode_t i2c_start_recv_dma(i2c_bus_t bus, hal_i2c_buffer_wrap_t *data_c
         return ERRCODE_I2C_DMA_CONFIG_ERROR;
     }
     return ERRCODE_SUCC;
+}
+
+static errcode_t i2c_wait_dma_transfer_done(i2c_bus_t bus, uint8_t dma_ch, uint32_t expected_len)
+{
+    uint64_t start_time = uapi_tcxo_get_ms();
+
+    do {
+        uint32_t block = uapi_dma_get_block_ts(dma_ch);
+        if (g_dma_trans[bus].trans_succ || block >= expected_len) {
+            osal_printk("[tp78] I2C DMA tx done bus:%u ch:%u block:%u irq:%u\r\n",
+                (unsigned int)bus, (unsigned int)dma_ch, (unsigned int)block,
+                g_dma_trans[bus].trans_succ ? 1U : 0U);
+            return ERRCODE_SUCC;
+        }
+        if ((uapi_tcxo_get_ms() - start_time) > CONFIG_I2C_WAIT_CONDITION_TIMEOUT) {
+            osal_printk("[tp78] I2C DMA tx timeout bus:%u ch:%u block:%u expected:%u\r\n",
+                (unsigned int)bus, (unsigned int)dma_ch, (unsigned int)block, (unsigned int)expected_len);
+            return ERRCODE_I2C_DMA_TRANSFER_ERROR;
+        }
+        osal_msleep(1);
+    } while (true);
 }
 
 static errcode_t i2c_dma_write_data_prepare(hal_i2c_buffer_wrap_t *data)
@@ -534,20 +563,26 @@ static errcode_t i2c_write_by_dma(i2c_bus_t bus, uint16_t dev_addr, hal_i2c_buff
         goto end;
     }
 
-    /* wait for trans */
-    if (i2c_int_mode_down(&(g_dma_trans[bus].dma_sem)) != OSAL_SUCCESS) {
-        g_dma_trans[bus].write_channel = 0;
-        ret = ERRCODE_I2C_DMA_TRANSFER_ERROR;
-        goto end;
-    }
-    g_dma_trans[bus].write_channel = 0;
-    if (!g_dma_trans[bus].trans_succ) {
-        ret = ERRCODE_I2C_DMA_TRANSFER_ERROR;
-        goto end;
+    if (g_dma_trans[bus].write_channel == 0) {
+        if (!g_dma_trans[bus].trans_succ) {
+            ret = ERRCODE_I2C_DMA_TRANSFER_ERROR;
+            goto end;
+        }
+    } else {
+        uint8_t dma_ch = (uint8_t)(g_dma_trans[bus].write_channel - 1);
+        ret = i2c_wait_dma_transfer_done(bus, dma_ch, data->len);
+        if (g_dma_trans[bus].write_channel > 0) {
+            (void)uapi_dma_end_transfer(dma_ch);
+            g_dma_trans[bus].write_channel = 0;
+        }
+        if (ret != ERRCODE_SUCC) {
+            goto end;
+        }
     }
 
     condition.ctrl_mask = i2c_ctrl_get_mask(I2C_CTRL_CHECK_TX_PROCESS_DONE);
-    ret = i2c_wait(bus, &condition, CONFIG_I2C_WAIT_CONDITION_TIMEOUT);
+    ret = i2c_ctrl_wait(bus, condition.ctrl_mask, CONFIG_I2C_WAIT_CONDITION_TIMEOUT);
+    osal_printk("[tp78] I2C DMA tx stop bus:%u ret:0x%x\r\n", (unsigned int)bus, (unsigned int)ret);
 
 end:
     (void)hal_i2c_ctrl(bus, I2C_CTRL_WRITE_RESTORE, (uintptr_t)NULL);
@@ -584,11 +619,15 @@ static errcode_t i2c_read_by_dma(i2c_bus_t bus, uint16_t dev_addr, hal_i2c_buffe
     /* 从模式在这里接收信号量，主模式在发送读命令之后接收信号量 */
     if (!i2c_ctrl->master_flag) {
         if (i2c_int_mode_down(&(g_dma_trans[bus].dma_sem)) != OSAL_SUCCESS) {
+            if (g_dma_trans[bus].read_channel > 0) {
+                (void)uapi_dma_end_transfer((uint8_t)(g_dma_trans[bus].read_channel - 1));
+            }
             g_dma_trans[bus].write_channel = 0;
+            g_dma_trans[bus].read_channel = 0;
             return ERRCODE_I2C_DMA_TRANSFER_ERROR;
         }
 
-        g_dma_trans[bus].write_channel = 0;
+        g_dma_trans[bus].read_channel = 0;
         if (!g_dma_trans[bus].trans_succ) {
             return ERRCODE_I2C_DMA_TRANSFER_ERROR;
         }
@@ -617,6 +656,12 @@ static errcode_t i2c_read_do_send_cmd(i2c_bus_t bus, hal_i2c_buffer_wrap_t *data
 
         /* 发送len - 1个命令的dma中断 */
         if (i2c_int_mode_down(&(g_dma_trans[bus].dma_sem)) != OSAL_SUCCESS) {
+            if (g_dma_trans[bus].write_channel > 0) {
+                (void)uapi_dma_end_transfer((uint8_t)(g_dma_trans[bus].write_channel - 1));
+            }
+            if (g_dma_trans[bus].read_channel > 0) {
+                (void)uapi_dma_end_transfer((uint8_t)(g_dma_trans[bus].read_channel - 1));
+            }
             g_dma_trans[bus].write_channel = 0;
             g_dma_trans[bus].read_channel = 0;
             return ERRCODE_I2C_DMA_TRANSFER_ERROR;
@@ -628,6 +673,9 @@ static errcode_t i2c_read_do_send_cmd(i2c_bus_t bus, hal_i2c_buffer_wrap_t *data
     hal_i2c_ctrl(bus, I2C_CTRL_FLUSH_RX_FIFO, (uintptr_t)&buffer_wrap);
     /* 等待接收数据的dma中断释放信号量 */
     if (i2c_int_mode_down(&(g_dma_trans[bus].dma_sem)) != OSAL_SUCCESS) {
+        if (g_dma_trans[bus].read_channel > 0) {
+            (void)uapi_dma_end_transfer((uint8_t)(g_dma_trans[bus].read_channel - 1));
+        }
         g_dma_trans[bus].read_channel = 0;
         (void)hal_i2c_ctrl(bus, I2C_CTRL_READ_RESTORE, (uintptr_t)NULL);
         return ERRCODE_I2C_DMA_TRANSFER_ERROR;

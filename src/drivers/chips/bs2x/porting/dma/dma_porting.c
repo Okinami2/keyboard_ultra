@@ -13,6 +13,7 @@
 #include "hal_dmac_v151.h"
 #include "arch_port.h"
 #include "dma_porting.h"
+#include "soc_osal.h"
 #if defined(CONFIG_DMA_SUPPORT_QUERY_REGS)
 #include "osal_debug.h"
 #endif
@@ -21,25 +22,28 @@ uintptr_t g_dma_base_addr =   (uintptr_t)DMA_BASE_ADDR;
 uint8_t chn_sreq_info[DMA_CHANNEL_MAX_NUM];
 uint8_t chn_dreq_info[DMA_CHANNEL_MAX_NUM];
 
+#define M_DMA_IRQN RESERVED32_IRQN
+
 static uint32_t g_dma_handshaking_channel_status = 0;
 
 static void irq_dma_handler(void)
 {
+    osal_printk("[tp78] DMA irq\r\n");
     hal_dma_v151_irq_handler();
-    osal_irq_clear(M_SDMA_IRQN);
+    osal_irq_clear(M_DMA_IRQN);
 }
 
 void dma_port_register_irq(void)
 {
-    osal_irq_request(M_SDMA_IRQN, (osal_irq_handler)irq_dma_handler, NULL, NULL, NULL);
-    osal_irq_enable(M_SDMA_IRQN);
-    osal_irq_set_priority(M_SDMA_IRQN, irq_prio(M_SDMA_IRQN));
+    osal_irq_request(M_DMA_IRQN, (osal_irq_handler)irq_dma_handler, NULL, NULL, NULL);
+    osal_irq_enable(M_DMA_IRQN);
+    osal_irq_set_priority(M_DMA_IRQN, irq_prio(M_DMA_IRQN));
 }
 
 void dma_port_unregister_irq(void)
 {
-    osal_irq_disable(M_SDMA_IRQN);
-    osal_irq_free(M_SDMA_IRQN, NULL);
+    osal_irq_disable(M_DMA_IRQN);
+    osal_irq_free(M_DMA_IRQN, NULL);
 }
 
 static hal_dma_mux_handshaking_status_t dma_port_get_handshaking_channel_status(hal_dma_handshaking_source_t channel)

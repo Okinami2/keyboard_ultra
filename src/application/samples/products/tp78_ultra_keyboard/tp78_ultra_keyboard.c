@@ -1,14 +1,18 @@
 #include "common_def.h"
 #include "soc_osal.h"
 #include "app_init.h"
+#include "tp78_at_debug.h"
+#include "tp78_i2c.h"
 #include "tp78_keyboard.h"
 #include "tp78_matrix.h"
+#include "tp78_oled.h"
 #include "tp78_rgb.h"
 #include "tp78_transport.h"
 
 #define TP78_TASK_PRIORITY 24
 #define TP78_TASK_STACK_SIZE 0x1400
 #define TP78_SCAN_PERIOD_MS 1
+#define TP78_OLED_STARTUP_ART_ENABLE 0
 
 static int tp78_keyboard_task(void *arg)
 {
@@ -20,8 +24,18 @@ static int tp78_keyboard_task(void *arg)
     }
 
     tp78_keyboard_init();
+    if (tp78_i2c_init() != 0) {
+        osal_printk("[tp78] I2C initialization failed\r\n");
+    }
     tp78_rgb_init();
-    osal_printk("[tp78] Ultra v2 ready, USB/BLE/SLE, matrix 6x14, RGB 83 LEDs\r\n");
+    osal_printk("[tp78] Ultra v2 ready, USB/BLE/SLE, matrix 6x14, RGB 83 LEDs, I2C devices:%u\r\n",
+        (unsigned int)tp78_i2c_get_device_count());
+    tp78_at_debug_init();
+#if TP78_OLED_STARTUP_ART_ENABLE
+    if (tp78_oled_show_next_art() != 0) {
+        osal_printk("[tp78] OLED startup art failed\r\n");
+    }
+#endif
 
     while (true) {
         (void)tp78_matrix_scan();

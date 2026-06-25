@@ -79,3 +79,95 @@ SLE 模式使用版本 2 完整状态帧连接 `tp78_ultra_receiver`。接收器
 `TP78_ULTRA`，现有接收器协议无需修改。
 
 HiSpark Studio 工程为 `src/tp78_ultra_keyboard.hiproj`，烧录协议为 `serial`。
+
+
+现状
+I2C 设备识别已经没问题，启动时能按预期得到 3 个设备：
+0x15 TrackPoint
+0x3C SSD1306 OLED
+0x5A MPR121
+非 DMA 方向之前已经证明 OLED 能响应，AT+TP78OLED 曾经可以让屏幕全亮。所以硬件、地址、管脚复用、基本 I2C 通路大概率是通的。
+现在卡在 I2C DMA 写 OLED：
+DMA 配置成功：ret:0x0
+DMA 启动成功：ret:0x0
+DMA 有搬运进度：block:8/12/32
+但最后失败：0x80001317
+总线表现为传输中卡住：scl:0 sda:0，恢复后 scl:1 sda:0
+这说明问题不是 OLED 地址或 AT 逻辑，而是 I2C + DMA + I2C FIFO/STOP/中断完成判定 这一段没有跑顺。
+发现的问题
+SDK 的 I2C DMA 等待原本是永久等待
+drivers/drivers/driver/i2c/i2c.c 里 DMA 等待用 osal_sem_down()，DMA 中断不回来就会永久卡住，导致 AT 一直 BUSY，甚至异常重启。
+
+DMA IRQ/回调没有稳定回来
+日志里没有看到 DMA irq / I2C DMA isr，但是 block 在增长，说明 DMA 确实搬了数据，只是完成中断/回调链路不可靠或没进来。
+
+长包 DMA 会卡在 FIFO 附近
+len:32 时经常停在 block:8 或 block:12，很像 I2C FIFO 没继续消耗，DMA request 停了。也就是说“单纯加大包”不是正确方向。
+
+IRQ 定义存在可疑不一致
+interrupt_adapter.c 注释里 32 是 M_DMA_IRQn，但 chip_core_irq.h 里 32 叫 RESERVED32_IRQN。我尝试把 DMA porting 改到 32 号 IRQ，但日志看起来还没有解决。
+
+已经改动过的内容
+application/samples/products/tp78_ultra_keyboard/tp78_i2c.c
+增加/保留 I2C DMA 模式初始化日志。
+去掉了 I2C 模块里重复 uapi_dma_init/open，因为系统启动阶段已经全局初始化 DMA。
+
+application/samples/products/tp78_ultra_keyboard/tp78_oled.c
+做过多轮 OLED 发送策略调整：合并 SSD1306 初始化命令。
+尝试命令包补齐到 32 字节。
+尝试数据块改成 32 字节。
+最后刚刚又改回更小的 8 字节分块方向，但这一步还没有编译和打包。
+
+
+drivers/drivers/driver/i2c/i2c.c
+把 DMA/INT 等待从永久等待改成超时等待。
+DMA 超时时释放 DMA channel，避免 AT worker 永久 BUSY。
+加了 I2C DMA 诊断日志：DMA 配置
+DMA 启动
+DMA ISR
+DMA block 计数
+
+尝试用 uapi_dma_get_block_ts() 判断 DMA 是否已经搬完，而不是完全依赖 DMA IRQ。
+
+drivers/chips/bs2x/porting/dma/dma_porting.c
+尝试把 DMA IRQ 从 M_SDMA_IRQN 改到 32 号 M_DMA_IRQN。
+加了 DMA IRQ 入口日志。
+
+当前最后状态
+最后一次已经打包的版本是“DMA block 轮询 + 诊断日志”的版本。
+我刚刚开始把 OLED 发包改回 8 字节小包，但还没编译、没打包。
+下次继续时，建议从这里开始：
+先编译当前 8 字节小包版本并打包测试。
+如果 block:8 expected:8 后还失败，看 tx stop 是否超时。
+如果 STOP 超时，就查 I2C DMA 写入的 16-bit command 是否正确带 STOP 位，以及 uapi_dma_end_transfer() 是否过早关了 DMA。
+
+Edited tp78_oled.c+25-14Review changesUndoReview
+
+
+
+
+2:45
+
+
+
+
+
+
+总结你如何编译打包
+
+
+
+2:45
+
+
+
+
+
+
+编译命令在仓库根目录 D:\garfieldMiao\fbb_bs2x\src 执行：
+ninja -C output/bs21e/acore/standard-bs21e-1100e
+编译成功后打包：
+C:\Users\GreatMagicianGarfiel\AppData\Local\Programs\Python\Python312\python.exe tools\pkg\packet.py bs21e standard-bs21e-1100e None bs21e-standard
+生成的刷机包路径：
+D:\garfieldMiao\fbb_bs2x\src\output\bs21e\fwpkg\standard-bs21e-1100e\bs21e_loadapp_only.fwpkg
+我每次流程就是：先 ninja 编译，确认无错误，再跑 packet.py 打包。
