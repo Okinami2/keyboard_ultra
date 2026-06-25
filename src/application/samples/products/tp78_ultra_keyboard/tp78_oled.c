@@ -7,19 +7,19 @@
 #include "tp78_oled.h"
 #include "tp78_oled_assets.h"
 
-#define TP78_OLED_WIDTH 64
-#define TP78_OLED_HEIGHT 48
+#define TP78_OLED_WIDTH 128
+#define TP78_OLED_HEIGHT 64
 #define TP78_OLED_PAGES (TP78_OLED_HEIGHT / 8)
 #define TP78_OLED_COLUMN_OFFSET 0
 #define TP78_OLED_PAGE_OFFSET 0
 #define TP78_OLED_CTRL_CMD 0x00
 #define TP78_OLED_CTRL_DATA 0x40
-#define TP78_OLED_MAX_I2C_WRITE_LEN 8
+#define TP78_OLED_MAX_I2C_WRITE_LEN 64
 #define TP78_OLED_COMMAND_CHUNK 1
-#define TP78_OLED_DATA_CHUNK (TP78_OLED_MAX_I2C_WRITE_LEN - 1)
+#define TP78_OLED_DATA_CHUNK 64
 #define TP78_OLED_DEBUG_DATA_MAX 16
 #define TP78_OLED_COMMAND_DELAY_MS 1
-#define TP78_OLED_PAGE_YIELD_MS 1
+#define TP78_OLED_PAGE_YIELD_MS 0
 #define TP78_OLED_INIT_DELAY_MS 20
 
 static bool g_oled_initialized;
@@ -136,12 +136,46 @@ static int32_t tp78_oled_write_chunk(const uint8_t *data, uint8_t length)
     return 0;
 }
 
+static void tp78_oled_fill_line_pattern(void)
+{
+    for (uint8_t page = 0; page < TP78_OLED_PAGES; page++) {
+        for (uint8_t x = 0; x < TP78_OLED_WIDTH; x++) {
+            uint8_t data = 0;
+            uint8_t y0 = (uint8_t)(page * 8);
+
+            if (x == 0 || x == (TP78_OLED_WIDTH - 1)) {
+                data = 0xFF;
+            }
+            if (page == 0) {
+                data |= 0x01;
+            }
+            if (page == (TP78_OLED_PAGES - 1)) {
+                data |= 0x80;
+            }
+            if (page == (TP78_OLED_PAGES / 2)) {
+                data |= 0x01;
+            }
+            for (uint8_t bit = 0; bit < 8; bit++) {
+                uint8_t y = (uint8_t)(y0 + bit);
+                if (y == (uint8_t)((uint16_t)x * TP78_OLED_HEIGHT / TP78_OLED_WIDTH) ||
+                    y == (uint8_t)(TP78_OLED_HEIGHT - 1 -
+                        ((uint16_t)x * TP78_OLED_HEIGHT / TP78_OLED_WIDTH))) {
+                    data |= (uint8_t)(1U << bit);
+                }
+            }
+
+            g_oled_framebuffer[page][x] = data;
+        }
+    }
+}
+
 int32_t tp78_oled_init(void)
 {
     static const uint8_t init_commands[] = {
         0xAE,
+        0x2E,
         0xD5, 0x80,
-        0xA8, 0x2F,
+        0xA8, 0x3F,
         0xD3, 0x00,
         0x40,
         0x8D, 0x14,
@@ -370,6 +404,24 @@ int32_t tp78_oled_debug_write_data(uint8_t length)
             tp78_oled_invalidate();
             return -1;
         }
+    }
+
+    return 0;
+}
+
+int32_t tp78_oled_debug_lines(void)
+{
+    const uint8_t commands[] = { 0x2E, 0xA4 };
+
+    if (tp78_oled_init() != 0 || tp78_oled_send_commands(commands, sizeof(commands)) != 0) {
+        tp78_oled_invalidate();
+        return -1;
+    }
+
+    tp78_oled_fill_line_pattern();
+    if (tp78_oled_flush_framebuffer() != 0) {
+        tp78_oled_invalidate();
+        return -1;
     }
 
     return 0;

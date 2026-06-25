@@ -10,6 +10,7 @@ int32_t tp78_oled_show_next_art(void);
 int32_t tp78_oled_debug_all_on(void);
 int32_t tp78_oled_debug_cursor(void);
 int32_t tp78_oled_debug_write_data(uint8_t length);
+int32_t tp78_oled_debug_lines(void);
 uint8_t tp78_oled_get_art_count(void);
 
 #endif

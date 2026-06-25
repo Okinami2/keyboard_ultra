@@ -52,7 +52,7 @@ static int32_t tp78_oled_at_execute(tp78_oled_at_cmd_t command)
 {
     switch (command) {
         case TP78_OLED_AT_CMD_SHOW:
-            return tp78_oled_show_next_art();
+            return tp78_oled_debug_lines();
         case TP78_OLED_AT_CMD_ON:
             return tp78_oled_debug_all_on();
         case TP78_OLED_AT_CMD_DATA1:
@@ -225,5 +225,5 @@ void tp78_at_debug_init(void)
     }
     osal_kthread_unlock();
 
-    osal_printk("[tp78] AT debug ready: AT+TP78OLED/ON/CUR/1/16 async\r\n");
+    osal_printk("[tp78] AT debug ready: AT+TP78OLED(lines)/ON/CUR/1/16 async\r\n");
 }
